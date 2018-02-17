@@ -4,10 +4,9 @@ import sys
 import time
 import threading
 import socket
-import signal
 import os
-import ntpath
 import io
+import phpstrings
 
 global connection_count #Server set to shutdown after N connections in cleanUp()
 connection_count = 0
@@ -25,6 +24,7 @@ class Server(object):
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             print("Binding server to Socket "+self.hostname+":"+str(self.port))
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.sock.bind((listenIP, self.port))
             self.portListen()
         except socket.error:
@@ -53,6 +53,8 @@ class Server(object):
         global connection_count
         global init_data
         global filename
+        global query
+        global ip
         size = 2048 #Number of Bytes Processed as group, might need raising
         print("Socket Information "+str(clientname))
 
@@ -60,14 +62,24 @@ class Server(object):
             connection_count = connection_count + 1
             print("Connection Number : "+str(connection_count))
             print("Active Thread for "+str(clientsock))
+            ip = str(clientsock).split('\'')[1]
+            print(ip)
             #try:
-            init_data = clientname.recv(size).decode() #Entire HTTP message from RC
-            method = init_data.split(' ')[0] #Gets HTTP Request Method from RC
-            URI = init_data.split(' ')[1]
-            httpver = init_data.split(' ')[2]
-            print("Method = "+method)
-            print("URI = "+URI)
-            print("Version = "+httpver)
+            #init_data = clientname.recv(size).decode() #Entire HTTP message from RC
+            init = clientname.recv(size)
+            init_data = init.decode()
+
+            try:
+                method = init_data.split(' ')[0] #Gets HTTP Request Method from RC
+                URI = init_data.split(' ')[1]
+                httpver = init_data.split(' ')[2]
+                print("Method = "+method)
+                print("URI = "+URI)
+                print("Version = "+httpver)
+            except:
+                print("Malformed HTTP Request")
+                clientname.close()
+                break
 
             if method not in allowed_methods:
                 print("DETECTED METHOD NOT ALLOWED")
@@ -77,28 +89,40 @@ class Server(object):
                 print("Responding with "+str(fullresponse))
                 clientname.send(fullresponse)
                 fullresponse = ""
-
+                clientname.close()
+                break
                 
             else:
 
-                self.getParams(method)
+                self.getParams(method, clientname)
+
                 #print("Entire Message = "+init_data)
-                if (method == 'GET') or (method == 'DELETE') or (method == 'POST'):  
-                    URI_requested = init_data.split(' ')[1] #Gets second of three elements on Request Line (ex. GET / HTTP/1.1) would get '/'
+                URI_requested = init_data.split(' ')[1] #Gets second of three elements on Request Line (ex. GET / HTTP/1.1) would get '/'
 
-                    if (method == 'GET'):
-                        if (URI_requested == "/") or (URI_requested == "\\"): #If Index Request
-                            tmpURI = str(rootdir)+"\index.html"
-                            tmpURI.replace(' ', '')
-                            tmpURI.replace('\r','')
-                            tmpURI.replace('\n','')
-                        else: #Any other referenced URI
-                            tmpURI = str(rootdir)+URI_requested
-                            print(tmpURI)
+                if (method == 'GET'): #Done?  Not Quite - Implement GET with Data Below for GET-Based PHP requests
+                    if (URI_requested == "/") or (URI_requested == "\\"): #If Index Request
+                        tmpURI = str(rootdir)+"\index.html"
+                        tmpURI.replace(' ', '')
+                        tmpURI.replace('\r','')
+                        tmpURI.replace('\n','')
+                    else: #Any other referenced URI
+                        tmpURI = str(rootdir)+URI_requested
+                        print(tmpURI)
 
-                            if "?" in URI_requested: #Parses data for GET-PHP requests
-                                a, b = tmpURI.split('?', 1)
-                                tmpURI = a
+                    if "?" in URI_requested: #Parses data for GET-PHP requests, naively
+                        a, b = tmpURI.split('?', 1)
+                        tmpURI = a
+                        query = b
+                        if ".php" in tmpURI:
+                            print("PHP URI REQUESTED")
+                            phpstrings.phpstrings(method, ip, 0, 0, tmpURI, query)
+                            print(method+" "+ip+" "+tmpURI+" "+query)
+                        #if '.php' == os.path.splitext(tmpURI)[-1].lower():
+                            #php.makeGET(tmpURI, query, htt)
+                        else:
+                            print("Extension Not Supported")
+
+                    else:
 
                         try:
                             filedir, filename = os.path.split(tmpURI)
@@ -129,25 +153,81 @@ class Server(object):
                             fullresponse = ""
                             clientname.close()
                             self.cleanUp()
+                    break
+                elif (method == 'DELETE'): #Done?
+                    New_URI = init_data.split(' ')[1]
+                    temp_URI = rootdir+New_URI
+                    temp_URI = os.path.normpath(temp_URI)
+                    print("Attempting to delete resource located at "+temp_URI)
+                    filedir, filename = os.path.split(temp_URI)
+                    curdir = os.getcwd()
+                    try:
+                        os.chdir(filedir)
+                        if (os.path.isfile(filename) == 1):
+                            print("File Exists! Deleting...")
+                            os.remove(filename)
+                            print("File Deleted!")
+                            writeLog(init_data, 1)
+                            responsehead = self.makeHeader(200)
+                            response = b"<html><body>200: OK!</body></html>"
+                            fullresponse = responsehead.encode()
+                            fullresponse += response
+                            print("Responding with "+str(fullresponse))
+                            clientname.send(fullresponse)
+                            fullresponse = ""
+                            clientname.close()
+                            self.cleanUp()
+
+                        else:
+                            print("Specified File Doesn't Exist!")
+                            writeLog(init_data, 0)
+                            responsehead = self.makeHeader(404)
+                            response = b"<html><body>Error 404: File Not Found!</body></html>"
+                            fullresponse = responsehead.encode()
+                            fullresponse += response
+                            print("Responding with "+str(fullresponse))
+                            clientname.send(fullresponse)
+                            fullresponse = ""
+                            clientname.close()
+                            self.cleanUp()
+
+                        os.chdir(curdir)
                         break
-                    elif (method == 'DELETE'):
-                        print("DELETE")
+                    except OSError:
+                        print("Path or File Deletion Error!")
+                        writeLog(init_data, 0)
+                        responsehead = self.makeHeader(500)
+                        response = b"<html><body>Error 500: Internal Server Error!</body></html>"
+                        fullresponse = responsehead.encode()
+                        fullresponse += response
+                        print("Responding with "+str(fullresponse))
+                        clientname.send(fullresponse)
+                        fullresponse = ""
+                        clientname.close()
                         self.cleanUp()
-                        break
-                    elif (method == 'POST'):
-                        print("POST")
-                        self.cleanUp()
-                        break
-                elif (method == 'PUT'):
+                    break
+
+                elif (method == 'POST'): #Content-Length, Content-Type must exist
+                    New_URI = init_data.split(' ')[1]
+                    temp_URI = rootdir+New_URI
+                    temp_URI = os.path.normpath(temp_URI)
                     print("\n")
-                    print("Entering PUT Functionality...")
+                    print("POST MECHANISM")
+                    query = HTTP_Data[1]
+                    phpstrings.phpstrings(method, ip, clength, ctype, temp_URI, query)
+                    print(method+" "+ip+" "+clength+" "+ctype+" "+temp_URI+" "+query)
+                    self.cleanUp()
+                    break
+
+                elif (method == 'PUT'):
+                    if (cl == 0): #Stops functionality if 'Content-Length' not seen in original request
+                        break
+                    print("\n")
                     New_URI = init_data.split(' ')[1]
                     temp_URI = rootdir+New_URI
                     temp_URI = os.path.normpath(temp_URI)
                     print("Attempting to create/modify resource located at "+temp_URI)
                     filedir, filename = os.path.split(temp_URI)
-                    print(filedir)
-                    print(filename)
                     curdir = os.getcwd()
                     try:
                         os.chdir(filedir)
@@ -163,11 +243,34 @@ class Server(object):
                         f.close()
                         print("")
                         os.chdir(curdir)
+                        print("URI Created..")
+                        writeLog(init_data, 1)
+                        responsehead = self.makeHeader(201)
+                        response = b"<html><body>201: Resource Created!</body></html>"
+                        fullresponse = responsehead.encode()
+                        fullresponse += response
+                        print("Responding with "+str(fullresponse))
+                        clientname.send(fullresponse)
+                        fullresponse = ""
                     except OSError:
                         print("Failed Writing File!")
                         writeLog(init_data, 0)
                         responsehead = self.makeHeader(500)
-                        response = b"<html><body>Error 500: File Not Found!</body></html>"
+                        response = b"<html><body>Error 500: Internal Server Error!</body></html>"
+                        fullresponse = responsehead.encode()
+                        fullresponse += response
+                        print("Responding with "+str(fullresponse))
+                        clientname.send(fullresponse)
+                        fullresponse = ""
+                    clientname.close()
+                    self.cleanUp()
+                    break
+                elif (method == 'CONNECT'):
+                    if auth == 1: #Changed for usage, when adding real authentication, change back to 0
+                        print("Unauthorized Proxy Connection Detected")
+                        writeLog(init_data, 0)
+                        responsehead = self.makeHeader(401)
+                        response = b"<html><body>401: Unauthorized</body></html>"
                         fullresponse = responsehead.encode()
                         fullresponse += response
                         print("Responding with "+str(fullresponse))
@@ -175,12 +278,34 @@ class Server(object):
                         fullresponse = ""
                         clientname.close()
                         self.cleanUp()
-                    break
+                        
+                    else:
+                        print("Authorized Proxy Connection Detected")
+                        writeLog(init_data, 1)
+                        proxyURI = init_data.split(' ')[1]
+                        Requested_URL, Requested_Port = proxyURI.split(':')
+                        #print(Requested_URL+str(Requested_Port))
+                        newsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        proxyinfo = socket.gethostbyname(Requested_URL)
+                        print("Attempting Connection To "+proxyinfo+":"+Requested_Port)
+                        newuri = (proxyinfo, int(Requested_Port))
+                        try:
+                            newsock.connect(newuri)
+                            newsock.sendall(b"GET / HTTP/1.1\r\n\r\n")
+                            newdata = newsock.recv(8192)
+                            newsock.close()
+                            clientname.send(newdata)
+                            clientname.close()
+                        except socket.error:
+                            print("Error Connecting to Specified Remote Host!")
+                            newsock.close()
+                            clientname.close()
 
+                    break
                 else:
-                    print("HTTP Method "+method+" not recognized!")
-                    responsehead = self.makeHeader(400)
-                    response = b"<html><body>Broken HTTP Request!</body></html>"
+                    print("This is a problem..")
+                    responsehead = self.makeHeader(500)
+                    response = b"<html><body>Broken Server!</body></html>"
                     break
 
                 #except Exception:
@@ -222,10 +347,16 @@ class Server(object):
         header += '\n'
         return header
 
-    def getParams(self, method): #Retrieves HTTP Options from received HTTP requests, data from POST/PUT
+    def getParams(self, method, clientname): #Retrieves HTTP Options from received HTTP requests, data from POST/PUT
+        global auth
         global HTTP_Parameters_ID
         global HTTP_Parameters_Value
         global HTTP_Data
+        global cl
+        global ct
+        global clength
+        global ctype
+        auth = 0 
         HTTP_Parameters_ID = []
         HTTP_Parameters_Value = []
         HTTP_Data = []
@@ -233,6 +364,8 @@ class Server(object):
         linecount = 0
         #print(string_stream)
         #print(init_data)
+        cl = 0
+        ct = 0
         for line in string_stream:
             if (linecount == 0):
                 method, URI, Version = line.split(' ')
@@ -245,21 +378,93 @@ class Server(object):
                         HTTP_Parameters_Value.append(b)
                         linecount += 1
                     except:
-                        print("End of Headers Detected!")
+                        print("End of Headers Detected!") #GET should not have body as per HTTP/1.1 specifications, section 4.3s
                         
                 elif (method == 'DELETE'):
-                    print("Delete Parameters")
-                elif (method == 'POST'):
-                    print("Post Parameters")
-                elif (method == 'PUT'):
                     try:
-                        a, b = line.split(":", 1) #For lines headers before body, disregard semi-colons after first split
+                        a, b = line.split(":", 1) 
                         HTTP_Parameters_ID.append(a)
                         HTTP_Parameters_Value.append(b)
                         linecount += 1
                     except:
-                        c = line
-                        HTTP_Data.append(c)
+                        print("End of Headers Detected!")
+                        
+                elif (method == 'CONNECT'):
+                    print("CONNECT Parameters")
+                elif (method == 'POST'):
+                    try:
+                        a, b = line.split(":", 1) #For lines headers before body, disregard semi-colons after first split
+                        if "Content-Length" in a:
+                            print("Length Detected")
+                            cl = 1
+                            clength=b.strip()
+                        if "Content-Type" in a:
+                            print("Type Detected")
+                            ct = 1
+                            ctype=b.strip()
+                        HTTP_Parameters_ID.append(a)
+                        HTTP_Parameters_Value.append(b)
+                        linecount += 1
+                    except:
+                        print(cl)
+                        if cl == 1 and ct == 1:
+                            c = line
+                            HTTP_Data.append(c)
+                        elif cl == 0:
+                            print("Content-Length not specified in POST request!")
+                            writeLog(init_data, 0)
+                            responsehead = self.makeHeader(411)
+                            response = b"<html><body>Error 411: Length Required!</body></html>"
+                            fullresponse = responsehead.encode()
+                            fullresponse += response
+                            print("Responding with "+str(fullresponse))
+                            clientname.send(fullresponse)
+                            fullresponse = "s"
+                            clientname.close()
+                            self.cleanUp()
+                            break
+                        elif ct == 0:
+                            print("Content-Type not specified in POST request!")
+                            writeLog(init_data, 0)
+                            responsehead = self.makeHeader(411)
+                            response = b"<html><body>Error 411: Type Required!</body></html>"
+                            fullresponse = responsehead.encode()
+                            fullresponse += response
+                            print("Responding with "+str(fullresponse))
+                            clientname.send(fullresponse)
+                            fullresponse = "s"
+                            clientname.close()
+                            self.cleanUp()
+                            break
+                        
+                elif (method == 'PUT'):
+                    try:
+                        a, b = line.split(":", 1) #For lines headers before body, disregard semi-colons after first split
+                        if "Content-Length" in a:
+                            print("Length Detected")
+                            cl = 1
+                        HTTP_Parameters_ID.append(a)
+                        HTTP_Parameters_Value.append(b)
+                        linecount += 1
+                    except:
+                        print(cl)
+                        if cl == 1:
+                            c = line
+                            HTTP_Data.append(c)
+                        else:
+                            print("Content-Length not specified in PUT request!")
+                            writeLog(init_data, 0)
+                            responsehead = self.makeHeader(411)
+                            response = b"<html><body>Error 411: Length Required!</body></html>"
+                            fullresponse = responsehead.encode()
+                            fullresponse += response
+                            print("Responding with "+str(fullresponse))
+                            clientname.send(fullresponse)
+                            fullresponse = "s"
+                            clientname.close()
+                            self.cleanUp()
+                            break
+
 
                         
         param_length = len(HTTP_Parameters_ID)
@@ -303,7 +508,7 @@ def failLog(message):  #Log-Writing functions
     try:
         curtime = time.strftime("%a, %d %b %Y %H:%M:%S ", time.localtime())
         f = open('Rejected Requests Log.txt', 'a')
-        f.write(curtime + "\n" + message + "\n")
+        f.write("\n" + curtime + "\n" + message + "\n")
         f.close()
     except OSError:
         print("Error Writing to Log File at "+str(faillogdir))
@@ -312,6 +517,7 @@ def failLog(message):  #Log-Writing functions
 def passLog(message): #Writes requests which are granted to the specified log
     try:
         temp = os.getcwd()
+        print(passlogdir)
         os.chdir(passlogdir)
     except OSError:
         print("Error Changing Working Directory to "+str(passlogdir))
