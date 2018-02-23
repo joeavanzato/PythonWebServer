@@ -1,0 +1,8 @@
+Methods:GET POST DELETE PUT CONNECT
+IP:127.0.0.1
+Port:80
+Root Directory:/home/joe/server/web
+Request Log (Pass):/home/joe/server/web
+Request Log (Fail):/home/joe/server/web
+Scripts:js php
+Protected-Files:X

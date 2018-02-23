@@ -6,29 +6,130 @@ import threading
 import socket
 import os
 import io
-import phpstrings
+import subprocess
+import traceback
+#import phpstrings
 
-global connection_count #Server set to shutdown after N connections in cleanUp()
+global connection_count
+global body
+global auth
+global HTTP_Parameters_ID
+global HTTP_Parameters_Value
+global HTTP_Data
+global cl
+global ct
+global clength
+global ah
+global ctype
+global cauth
+global HTTP_HOST
+global METHOD
+global CONTENT_LENGTH
+global CONTENT_TYPE
+global GATEWAY_INTERFACE
+global FILE
+global QUERY_STRING
+
 connection_count = 0
 
 class Server(object):
+    global HTTP_HOST
+    global METHOD
+    global CONTENT_LENGTH
+    global CONTENT_TYPE
+    global GATEWAY_INTERFACE
+    global FILE
+    global QUERY_STRING
+    global body
+    global connection_count
+    global body
+    global auth
+    global HTTP_Parameters_ID
+    global HTTP_Parameters_Value
+    global HTTP_Data
+    global cl
+    global ct
+    global clength
+    global ah
+    global ctype
+    global cauth
 
-    def __init__(self, port):
+    def __init__(self, port, ip):
         self.port = port
-        self.hostname = socket.gethostname()#.split('.')[0] #Can change depending upon requirements
+        self.ips = ip
+        self.hostname = socket.gethostbyname(socket.gethostname())
         self.location = rootdir
         print("Detected Local Host Name "+self.hostname) 
         print("Port Selected : "+str(port)) 
+
+    
+    def phpstrings(self, method2, ip2, clength2, ctype2, temp_URI2, query2):
+        global HTTP_HOST
+        global METHOD
+        global CONTENT_LENGTH
+        global CONTENT_TYPE
+        global GATEWAY_INTERFACE
+        global FILE
+        global QUERY_STRING
+        global body
+        HTTP_HOST = ip2
+        METHOD = method2
+        CONTENT_LENGTH = clength2
+        CONTENT_TYPE = ctype2
+        GATEWAY_INTERFACE = 'CGI/1.1'  
+        FILE = temp_URI2
+        QUERY_STRING = query2
+
+        if METHOD == 'GET':
+            self.makeget()
+        elif METHOD == 'POST':
+            self.makepost()
+
+    def makepost(self):
+        global body
+        REMOTE_HOST = HTTP_HOST
+        REQUEST_METHOD = METHOD
+        bashcmd = "export REDIRECT_STATUS='CGI'; export SCRIPT_FILENAME='"+FILE+"'; export REMOTE_HOST='"+REMOTE_HOST+"'; export GATEWAY_INTERFACE='"+GATEWAY_INTERFACE+"'; export REQUEST_METHOD='"+REQUEST_METHOD+"'; export CONTENT_TYPE='"+CONTENT_TYPE+"'; export CONTENT_LENGTH='"+CONTENT_LENGTH+"'; export REQUEST_BODY='"+QUERY_STRING+"'; echo $REQUEST_BODY | php-cgi -f "+FILE
+        print(bashcmd)
+        try:
+            body = subprocess.check_output(bashcmd, shell=True)
+            print("Command Executed")
+            return body
+        except:
+            print("Command Failed")
+            traceback.print_exc()
+            body = 500
+            print("Internal Server Error "+str(body))
+            return body
+
+    def makeget(self):
+        global body
+        if QUERY_STRING == 'X':
+            bashcmd = "export SCRIPT_FILENAME='"+FILE+"'; export REDIRECT_STATUS='CGI'; export HTTP_HOST='"+HTTP_HOST+"'; export GATEWAY_INTERFACE='"+GATEWAY_INTERFACE+"'; export REQUEST_METHOD='"+METHOD+"'; php-cgi -f "+FILE
+        else:
+            bashcmd = "export SCRIPT_FILENAME='"+FILE+"'; export REDIRECT_STATUS='CGI'; export HTTP_HOST='"+HTTP_HOST+"'; export GATEWAY_INTERFACE='"+GATEWAY_INTERFACE+"'; export REQUEST_METHOD='"+METHOD+"'; export QUERY_STRING='"+QUERY_STRING+"'; php-cgi -f "+FILE
+        print(bashcmd)
+        try:
+            body = subprocess.check_output(bashcmd, shell=True, stderr=subprocess.STDOUT)
+            print("Command Executed")
+            return body
+        except:
+            print("Command Failed")
+            traceback.print_exc()
+            body = 500
+            print("Internal Server Error "+str(body))
+            return body
 
     def createSocket(self): #IPv4/TCP Mode hard-configured
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             print("Binding server to Socket "+self.hostname+":"+str(self.port))
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.sock.bind((listenIP, self.port))
+            self.sock.bind((self.ips, self.port))
             self.portListen()
         except socket.error:
             print("Error Creating or Binding Socket!")
+            traceback.print_exc()
             #self.destroySocket()
 
     def destroySocket(self): #Closes Socket when called
@@ -38,6 +139,7 @@ class Server(object):
             #self.sock.shutdown(socket.SHUT_RDWR)
         except socket.error:
             print("Error Closing Socket!")
+            traceback.print_exc()
 
     def portListen(self):
         self.sock.listen(5) #Max Connections
@@ -55,6 +157,9 @@ class Server(object):
         global filename
         global query
         global ip
+        global clength
+        global ctype
+        global body
         size = 2048 #Number of Bytes Processed as group, might need raising
         print("Socket Information "+str(clientname))
 
@@ -78,14 +183,35 @@ class Server(object):
                 print("Version = "+httpver)
             except:
                 print("Malformed HTTP Request")
+                writeLog(init_data, 0)
+                responsehead = self.makeHeader(500)
+                response = "<html><body>Error 500: Malformed Request!</body></html>"
+                fullresponse = (responsehead + response).encode() 
+                print("Responding with "+str(fullresponse))
+                clientname.send(fullresponse)
+                fullresponse = ""
                 clientname.close()
                 break
 
-            if method not in allowed_methods:
+            if "HTTP/1.1" not in httpver:
+                print("DETECTED VERSION NOT ALLOWED, ONLY HTTP/1.1")
+                writeLog(init_data, 0)
+                responsehead = self.makeHeader(505)
+                fullresponse = responsehead.encode() 
+                print("Responding with "+str(fullresponse))
+                clientname.send(fullresponse)
+                fullresponse = ""
+                clientname.close()
+                break
+
+
+            elif method not in allowed_methods:
                 print("DETECTED METHOD NOT ALLOWED")
                 writeLog(init_data, 0)
                 responsehead = self.makeHeader(405)
                 fullresponse = responsehead.encode() 
+                response = b"<html><body>Error 403: Forbidden!</body></html>"
+                fullresponse =+ response
                 print("Responding with "+str(fullresponse))
                 clientname.send(fullresponse)
                 fullresponse = ""
@@ -101,7 +227,7 @@ class Server(object):
 
                 if (method == 'GET'): #Done?  Not Quite - Implement GET with Data Below for GET-Based PHP requests
                     if (URI_requested == "/") or (URI_requested == "\\"): #If Index Request
-                        tmpURI = str(rootdir)+"\index.html"
+                        tmpURI = str(rootdir)+"/index.html"
                         tmpURI.replace(' ', '')
                         tmpURI.replace('\r','')
                         tmpURI.replace('\n','')
@@ -113,39 +239,72 @@ class Server(object):
                         a, b = tmpURI.split('?', 1)
                         tmpURI = a
                         query = b
-                        if ".php" in tmpURI:
-                            print("PHP URI REQUESTED")
-                            phpstrings.phpstrings(method, ip, 0, 0, tmpURI, query)
-                            print(method+" "+ip+" "+tmpURI+" "+query)
+                        if ".php" in tmpURI and "php" in allowed_scripts:
+
+                            if URI_requested in protected_files and ah == 0:
+                                writeLog(init_data, 0)
+                                responsehead = self.makeHeader(401)
+                                response = b"<html><body>Error 401: Unauthorized!</body></html>"
+                                fullresponse = responsehead.encode()
+                                fullresponse += response
+                                print("Responding with "+str(fullresponse))
+                                clientname.send(fullresponse)
+                                fullresponse = ""
+                                clientname.close()
+                                self.cleanUp()
+                                break
+                            else:
+                                print("PHP URI REQUESTED VIA GET")
+                                self.phpstrings(method, ip, 0, 0, tmpURI, query)
+                                if type(body) == int:
+                                    writeLog(init_data, 0)
+                                    responsehead = self.makeHeader(500)
+                                    fullresponse = responsehead.encode()
+                                    print("Responding with "+str(fullresponse))
+                                    clientname.send(fullresponse)
+                                    fullresponse = ""
+                                    clientname.close()
+                                    self.cleanUp()
+                                    print("Error Executing PHP, 500 Error Sent")
+                                    break
+                                else:
+                                    writeLog(init_data, 1)
+                                    header = ''
+                                    header += 'HTTP/1.1 200 OK\r\n' #Successful GET requests
+                                    curtime = time.strftime("%a, %d %b %Y %H:%M:%S ", time.localtime())
+                                    header += ('Date: '+curtime+'\r\n')
+                                    header += 'Server: Python HTTP Test Server\r\n'
+                                    clen = len(body)
+                                    header += 'Content-Length: '+str(clen)+"\r\n"
+                                    header += 'Keep-Alive: timeout=5, max=100\r\n'
+                                    header += 'Connection: Keep-Alive\r\n'
+                                    print("TESTING2")
+                                    if "Status: 302" in str(body):
+                                    	print("Replacing Status and De-Coupling Responses")
+                                    	header += 'Connection: Keep-Alive\r\n\r\n'                               
+                                    	body = body.replace(b"Status:", b"HTTP/1.1")
+                                    	clientname.send(body)
+                                    	clientname.close()
+                                    else:
+                                    	header += 'Connection: Keep-Alive\r\n'
+                                    	#body = body.encode()
+                                    	#response = ((header).encode())+body
+                                    	body = body.decode('utf-8')
+                                    	response = str(header)+str(body)
+                                    	clientname.send(bytes(response.encode('utf-8')))
+                                    	#clientname.send(body)
+                                    	print("Responding With.."+str(response))
+                                    	clientname.close()
+                                    	#fullresponse += body
+                                    	#clientname.send(fullresponse)
+                                    break
                         #if '.php' == os.path.splitext(tmpURI)[-1].lower():
                             #php.makeGET(tmpURI, query, htt)
-                        else:
-                            print("Extension Not Supported")
-
-                    else:
-
-                        try:
-                            filedir, filename = os.path.split(tmpURI)
-                            print("Requesting URI : "+tmpURI)
-                            print("Serving file...")
-                            f = open(tmpURI, 'rb')
-                            response = f.read()
-                            f.close()
-                            responsehead = self.makeHeader(200)
-                            fullresponse = responsehead.encode() 
-                            fullresponse += response #Adding HTTP code to response
-                            print("Responding with "+str(fullresponse))
-                            clientname.send(fullresponse)
-                            writeLog(init_data, 1)
-                            fullresponse = ""
-                            print("Closing Connection with "+str(clientsock))
-                            clientname.close()
-                            self.cleanUp()
-                        except:
-                            print("Error Reading "+tmpURI)
+                        elif ".php" in tmpURI and "php" not in allowed_scripts:
+                            print("Script Extension Not Supported 1")
                             writeLog(init_data, 0)
-                            responsehead = self.makeHeader(404)
-                            response = b"<html><body>Error 404: File Not Found!</body></html>"
+                            responsehead = self.makeHeader(403)
+                            response = b"<html><body>Error 403: Forbidden!</body></html>"
                             fullresponse = responsehead.encode()
                             fullresponse += response
                             print("Responding with "+str(fullresponse))
@@ -153,6 +312,118 @@ class Server(object):
                             fullresponse = ""
                             clientname.close()
                             self.cleanUp()
+                        else:
+                            pass
+                        break
+
+                    else:
+                        print(allowed_scripts)
+                        print(tmpURI)
+                        if ".php" in tmpURI and "php" in allowed_scripts:
+                            try:
+                                clength = 0
+                                ctype = 0
+                                query = ''
+                                self.phpstrings(method, ip, clength, ctype, tmpURI, query)
+                                if type(body) == int:
+                                    writeLog(init_data, 0)
+                                    responsehead = self.makeHeader(500)
+                                    response = b"<html><body>Error 500: Internal Server Error!</body></html>"
+                                    fullresponse = responsehead.encode()
+                                    fullresponse += response
+                                    print("Responding with "+str(fullresponse))
+                                    clientname.send(fullresponse)
+                                    clientname.close()
+                                else:
+                                    writeLog(init_data, 1)
+                                    header = ''
+                                    header += 'HTTP/1.1 200 OK\r\n' #Successful GET requests
+                                    curtime = time.strftime("%a, %d %b %Y %H:%M:%S ", time.localtime())
+                                    header += ('Date: '+curtime+'\r\n')
+                                    header += 'Server: Python HTTP Test Server\r\n'
+                                    clen = len(body)
+                                    header += 'Content-Length: '+str(clen)+"\r\n"
+                                    header += 'Keep-Alive: timeout=5, max=100\r\n'
+                                    header += 'Connection: Keep-Alive\r\n'
+                                    print("TESTING1")
+                                    if "Status: 302" in str(body):
+
+                                    	print("Replacing Status and De-Coupling Responses")
+                                    	header += 'Connection: Keep-Alive\r\n\r\n'                               
+
+                                    	body = body.replace(b"Status:", b"HTTP/1.1")
+                                    	print(body)
+                                    	clientname.send(body)
+                                    	clientname.close()
+                                    else:
+                                    	header += 'Connection: Keep-Alive\r\n'
+                                    	#body = body.encode()
+                                    	#response = ((header).encode())+body
+                                    	body = body.decode('utf-8')
+                                    	response = str(header)+str(body)
+                                    	clientname.send(bytes(response.encode('utf-8')))
+                                    	#clientname.send(body)
+                                    	print("Responding With.."+str(response))
+                                    	clientname.close()
+                                    	#fullresponse += body
+
+                                    	#clientname.send(fullresponse)
+                            except:
+                                traceback.print_exc()
+                                writeLog(init_data, 0)
+                                responsehead = self.makeHeader(500)
+                                response = b"<html><body>Error 500: Internal Server Error!</body></html>"
+                                fullresponse = responsehead.encode()
+                                #fullresponse += response
+                                print("Responding with "+str(fullresponse))
+                                clientname.send(fullresponse)
+                                print("500 Response Previously Sent, Error Executing PHP")
+ 
+                            break
+                        elif ".php" in tmpURI and "php" not in allowed_scripts:
+                            print("Script Extension Not Supported 2")
+                            writeLog(init_data, 0)
+                            responsehead = self.makeHeader(403)
+                            response = b"<html><body>Error 403: Forbidden!</body></html>"
+                            fullresponse = responsehead.encode()
+                            fullresponse += response
+                            print("Responding with "+str(fullresponse))
+                            clientname.send(fullresponse)
+                            fullresponse = ""
+                            clientname.close()
+                            self.cleanUp()
+                            break
+                        else:
+                            try:
+                                filedir, filename = os.path.split(tmpURI)
+                                print("Requesting URI : "+tmpURI)
+                                print("Serving file...")
+                                f = open(tmpURI, 'rb')
+                                response = f.read()
+                                f.close()
+                                responsehead = self.makeHeader(200)
+                                fullresponse = responsehead.encode() 
+                                fullresponse += response #Adding HTTP code to response
+                                print("Responding with "+str(fullresponse))
+                                clientname.send(fullresponse)
+                                writeLog(init_data, 1)
+                                fullresponse = ""
+                                print("Closing Connection with "+str(clientsock))
+                                clientname.close()
+                                self.cleanUp()
+                            except:
+                                print("Error Reading "+tmpURI)
+                                traceback.print_exc()
+                                writeLog(init_data, 0)
+                                responsehead = self.makeHeader(404)
+                                response = b"<html><body>Error 404: File Not Found!</body></html>"
+                                fullresponse = responsehead.encode()
+                                fullresponse += response
+                                print("Responding with "+str(fullresponse))
+                                clientname.send(fullresponse)
+                                fullresponse = ""
+                                clientname.close()
+                                self.cleanUp()
                     break
                 elif (method == 'DELETE'): #Done?
                     New_URI = init_data.split(' ')[1]
@@ -194,6 +465,7 @@ class Server(object):
                         os.chdir(curdir)
                         break
                     except OSError:
+                        traceback.print_exc()
                         print("Path or File Deletion Error!")
                         writeLog(init_data, 0)
                         responsehead = self.makeHeader(500)
@@ -208,15 +480,115 @@ class Server(object):
                     break
 
                 elif (method == 'POST'): #Content-Length, Content-Type must exist
+                    print("Post Mechanism")
                     New_URI = init_data.split(' ')[1]
                     temp_URI = rootdir+New_URI
                     temp_URI = os.path.normpath(temp_URI)
-                    print("\n")
-                    print("POST MECHANISM")
-                    query = HTTP_Data[1]
-                    phpstrings.phpstrings(method, ip, clength, ctype, temp_URI, query)
-                    print(method+" "+ip+" "+clength+" "+ctype+" "+temp_URI+" "+query)
-                    self.cleanUp()
+                    print(allowed_scripts)
+                    print(temp_URI)
+                    print(New_URI)
+                    protect = 0
+                    print(protected_files)
+                    lenp = len(protected_files)
+                    x = 0
+                    while (x != lenp):
+                        print(protected_files[x])
+                        if protected_files[x] in New_URI:
+                            #print(New_URI+" Match Detected with Protected File")
+                            protect = 0 #Change for Final
+                            break
+                        else:
+                            x = x + 1
+                            pass
+                    if (".php" in temp_URI) and ("php" in allowed_scripts):
+                        query = HTTP_Data[1]
+                        print(method+" "+ip+" "+clength+" "+ctype+" "+temp_URI+" "+query)
+                        print("PHP URI REQUESTED 3")
+                        if protect == 1 and ah == 0:
+                            writeLog(init_data, 0)
+                            responsehead = self.makeHeader(401)
+                            response = b"<html><body>Error 401: Unauthorized!</body></html>"
+                            fullresponse = responsehead.encode()
+                            fullresponse += response
+                            print("Responding with "+str(fullresponse))
+                            clientname.send(fullresponse)
+                            fullresponse = ""
+                            clientname.close()
+                            self.cleanUp()
+                            break
+                        else:
+                            try:
+                                self.phpstrings(method, ip, clength, ctype, temp_URI, query)
+                                if type(body) == int:
+                                    traceback.print_exc()
+                                    print("Path or File Deletion Error!")
+                                    writeLog(init_data, 0)
+                                    responsehead = self.makeHeader(500)
+                                    response = b"<html><body>Error 500: Internal Server Error!</body></html>"
+                                    fullresponse = responsehead.encode()
+                                    fullresponse += response
+                                    print("Responding with "+str(fullresponse))
+                                    clientname.send(fullresponse)
+                                    fullresponse = ""
+                                    clientname.close()
+                                    self.cleanUp()
+                                    break
+                                else:
+                                    writeLog(init_data, 1)
+                                    header = ''
+                                    header += 'HTTP/1.1 200 OK\r\n' #Successful PUT requests
+                                    curtime = time.strftime("%a, %d %b %Y %H:%M:%S ", time.localtime())
+                                    header += ('Date: '+curtime+'\r\n')
+                                    header += 'Server: Python HTTP Test Server\r\n'
+                                    clen = len(body)
+                                    header += 'Content-Length: '+str(clen)+"\r\n"
+                                    header += 'Keep-Alive: timeout=5, max=100\r\n'
+                                    if "Status: 302" in str(body):
+                                    	print("Replacing Status and De-Coupling Responses")
+                                    	header += 'Connection: Keep-Alive\r\n'                               
+                                    	body = body.replace(b"Status:", b"HTTP/1.1")
+                                    	clientname.send(body)
+                                    	clientname.close()
+                                    else:
+                                    	header += 'Connection: Keep-Alive\r\n'
+                                    	#body = body.encode()
+                                    	#response = ((header).encode())+body
+                                    	body = body.decode('utf-8')
+                                    	response = str(header)+str(body)
+                                    	clientname.send(bytes(response.encode('utf-8')))
+                                    	#clientname.send(body)
+                                    	print("Responding With.."+str(response))
+                                    	clientname.close()
+                                    	#fullresponse += body
+                                    	#clientname.send(fullresponse)
+                            except:
+                                traceback.print_exc()
+                                print("PHP Allowed, .php in URI, Error Executing PHP or Passing Data")
+                                #writeLog(init_data, 0)
+                                #responsehead = self.makeHeader(500)
+                                #response = b"<html><body>Error 500: Internal Server Error!</body></html>"
+                                #fullresponse = responsehead.encode()
+                                #fullresponse += response
+                                #print("Responding with "+str(fullresponse))
+                                #clientname.send(fullresponse)
+                            fullresponse = ""
+                            clientname.close()
+                            self.cleanUp()
+                            #if '.php' == os.path.splitext(tmpURI)[-1].lower():
+                                #php.makeGET(tmpURI, query, htt)
+                    elif (".php" in temp_URI) and ("php" not in allowed_scripts):
+                        print("Script Extension Not Supported")
+                        writeLog(init_data, 0)
+                        responsehead = self.makeHeader(403)
+                        response = b"<html><body>Error 403: Forbidden!</body></html>"
+                        fullresponse = responsehead.encode()
+                        fullresponse += response
+                        print("Responding with "+str(fullresponse))
+                        clientname.send(fullresponse)
+                        fullresponse = ""
+                        clientname.close()
+                        self.cleanUp()
+                        
                     break
 
                 elif (method == 'PUT'):
@@ -355,7 +727,9 @@ class Server(object):
         global cl
         global ct
         global clength
+        global ah
         global ctype
+        global cauth
         auth = 0 
         HTTP_Parameters_ID = []
         HTTP_Parameters_Value = []
@@ -366,6 +740,8 @@ class Server(object):
         #print(init_data)
         cl = 0
         ct = 0
+        ah = 0
+
         for line in string_stream:
             if (linecount == 0):
                 method, URI, Version = line.split(' ')
@@ -374,9 +750,14 @@ class Server(object):
                 if (method == 'GET'):
                     try:
                         a, b = line.split(":", 1) #For lines headers before body, disregard semi-colons after first split
+                        if "Authorization" in a:
+                            print("Authorization Detected")
+                            ah = 1
+                            cauth=b.strip()
                         HTTP_Parameters_ID.append(a)
                         HTTP_Parameters_Value.append(b)
                         linecount += 1
+
                     except:
                         print("End of Headers Detected!") #GET should not have body as per HTTP/1.1 specifications, section 4.3s
                         
@@ -402,6 +783,10 @@ class Server(object):
                             print("Type Detected")
                             ct = 1
                             ctype=b.strip()
+                        if "Authorization" in a:
+                            print("Authorization Detected")
+                            ah = 1
+                            cauth=b.strip()
                         HTTP_Parameters_ID.append(a)
                         HTTP_Parameters_Value.append(b)
                         linecount += 1
@@ -504,7 +889,8 @@ def failLog(message):  #Log-Writing functions
         temp = os.getcwd()
         os.chdir(faillogdir)
     except OSError:
-        print("Error Changing Working Directory to "+str(faillogdir))
+        #print("Error Changing Working Directory to "+str(faillogdir))
+        pass
     try:
         curtime = time.strftime("%a, %d %b %Y %H:%M:%S ", time.localtime())
         f = open('Rejected Requests Log.txt', 'a')
@@ -520,7 +906,8 @@ def passLog(message): #Writes requests which are granted to the specified log
         print(passlogdir)
         os.chdir(passlogdir)
     except OSError:
-        print("Error Changing Working Directory to "+str(passlogdir))
+        pass
+        #print("Error Changing Working Directory to "+str(passlogdir))
     try:
         curtime = time.strftime("%a, %d %b %Y %H:%M:%S ", time.localtime())
         f = open('Approved Requests Log.txt', 'a')
@@ -528,7 +915,7 @@ def passLog(message): #Writes requests which are granted to the specified log
         f.close()
     except OSError:
         print("Error Writing to Log File at "+str(passlogdir))
-    os.chdir(temp)
+        os.chdir(temp)
 
 
 def getConfig(): #Reads 'config.txt' from script's working directory to assign IP, Port, Root Content Dir. and Logging Directories ('Bad Logs.txt', 'Good Logs.txt')
@@ -539,6 +926,9 @@ def getConfig(): #Reads 'config.txt' from script's working directory to assign I
     global passlogdir
     global faillogdir
     global allowed_methods
+    global allowed_scripts
+    global protected_files
+    protected_files = []
     config_options = []
     config_values = []
 
@@ -561,14 +951,18 @@ def getConfig(): #Reads 'config.txt' from script's working directory to assign I
         print(config_options[1]+": "+config_values[1], end='')
         print(config_options[2]+": "+config_values[2], end='')
         print(config_options[3]+": "+config_values[3], end='')
-        print(config_options[4]+": "+config_values[4])
+        print(config_options[4]+": "+config_values[4], end='')
+        print(config_options[5]+": "+config_values[5], end='')
+        print(config_options[6]+": "+config_values[6])
+        print("")
 
         listenIP = config_values[0]
         listenPort = int(config_values[1])
         rootdir = (str(config_values[2]).strip())
         passlogdir = config_values[3]
         faillogdir = config_values[4]
-
+        allowed_scripts = config_values[5]
+        protected_files = config_values[6]
         newServer()
 
     except OSError:
@@ -578,7 +972,7 @@ def getConfig(): #Reads 'config.txt' from script's working directory to assign I
         quit
 
 def newServer():
-    vserver = Server(listenPort)
+    vserver = Server(listenPort, listenIP)
     vserver.createSocket()
 
 getConfig()
