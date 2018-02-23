@@ -1,6 +1,0 @@
-Methods:GET POST CONNECT DELETE PUT
-IP:127.0.0.1
-Port:80
-Root Directory:C:\Users\Joe\source\repos\Server-1\Server-1\web
-Request Log (Pass):C:\Users\Joe\source\repos\Server-1\Server-1
-Request Log (Fail):C:\Users\Joe\source\repos\Server-1\Server-1
